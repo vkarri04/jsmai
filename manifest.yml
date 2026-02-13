@@ -12,7 +12,7 @@ modules:
       title: Agent
       icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
 
-  jiraServiceManagement:portalRequestViewAction:
+  jiraServiceManagement:portalFooter:
     - key: agent-portal-chat
       resource: portal
       resolver:
