@@ -1,6 +1,5 @@
 import Resolver from "@forge/resolver";
-import { storage } from "@forge/api";
-import api from "@forge/api";
+import api, { storage, route } from "@forge/api";
 
 const resolver = new Resolver();
 
@@ -21,7 +20,7 @@ resolver.define("getSettings", async () => {
 resolver.define("getProjects", async () => {
   try {
     const response = await api.asApp().requestJira(
-      "/rest/api/3/project/search?typeKey=service_desk&maxResults=100",
+      route`/rest/api/3/project/search?typeKey=service_desk&maxResults=100`,
       { headers: { Accept: "application/json" } }
     );
 
