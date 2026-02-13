@@ -19,25 +19,31 @@ resolver.define("getSettings", async () => {
 // ─── Project-level Chat Settings ─────────────────────────────────────
 
 resolver.define("getProjects", async () => {
-  const response = await api.asApp().requestJira(
-    "/rest/api/3/project/search?typeKey=service_desk&maxResults=100",
-    { headers: { Accept: "application/json" } }
-  );
+  try {
+    const response = await api.asApp().requestJira(
+      "/rest/api/3/project/search?typeKey=service_desk&maxResults=100",
+      { headers: { Accept: "application/json" } }
+    );
 
-  if (!response.ok) {
-    const text = await response.text();
-    return { error: `Failed to fetch projects: ${response.status} ${text}` };
+    if (!response.ok) {
+      const text = await response.text();
+      return { error: `Failed to fetch projects: ${response.status} — ${text}` };
+    }
+
+    const data = await response.json();
+    const values = data.values || [];
+
+    return {
+      projects: values.map((p) => ({
+        id: p.id,
+        key: p.key,
+        name: p.name,
+        avatarUrl: p.avatarUrls?.["48x48"] || p.avatarUrls?.["32x32"] || "",
+      })),
+    };
+  } catch (err) {
+    return { error: `Resolver error: ${err.message || String(err)}` };
   }
-
-  const data = await response.json();
-  return {
-    projects: data.values.map((p) => ({
-      id: p.id,
-      key: p.key,
-      name: p.name,
-      avatarUrl: p.avatarUrls?.["48x48"] || p.avatarUrls?.["32x32"] || "",
-    })),
-  };
 });
 
 resolver.define("getProjectChatSettings", async () => {

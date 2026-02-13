@@ -193,7 +193,7 @@ function App() {
         setProjects(projectsResult.projects || []);
         setProjectSettings(settingsResult || {});
       } catch (err) {
-        setError('Failed to load project data. Please try again.');
+        setError(`Failed to load project data: ${err.message || 'Unknown error'}. Please try again.`);
       } finally {
         setLoading(false);
       }
