@@ -50,3 +50,5 @@ permissions:
     fetch:
       backend:
         - https://your-api-domain.com
+        - https://api.openai.com
+        - https://api.anthropic.com

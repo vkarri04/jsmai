@@ -144,6 +144,92 @@ const styles = {
     color: '#36B37E',
     fontWeight: 500,
   },
+  // ─── AI Model Settings styles ──────────────────────────────
+  sectionSpacing: {
+    marginTop: 32,
+  },
+  formGroup: {
+    padding: '16px 20px',
+    borderBottom: '1px solid #EBECF0',
+  },
+  formGroupLast: {
+    padding: '16px 20px',
+  },
+  label: {
+    display: 'block',
+    fontSize: 12,
+    fontWeight: 600,
+    color: '#6B778C',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  select: {
+    width: '100%',
+    padding: '8px 12px',
+    fontSize: 14,
+    border: '1px solid #DFE1E6',
+    borderRadius: 4,
+    backgroundColor: '#FAFBFC',
+    color: '#172B4D',
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  input: {
+    width: '100%',
+    padding: '8px 12px',
+    fontSize: 14,
+    border: '1px solid #DFE1E6',
+    borderRadius: 4,
+    backgroundColor: '#FAFBFC',
+    color: '#172B4D',
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  saveButton: (disabled) => ({
+    padding: '8px 20px',
+    fontSize: 14,
+    fontWeight: 500,
+    color: '#FFFFFF',
+    backgroundColor: disabled ? '#B3D4FF' : '#0052CC',
+    border: 'none',
+    borderRadius: 4,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    transition: 'background-color 0.15s',
+  }),
+  buttonRow: {
+    padding: '16px 20px',
+    display: 'flex',
+    justifyContent: 'flex-end',
+    borderTop: '1px solid #DFE1E6',
+    background: '#FAFBFC',
+  },
+  apiKeyWrapper: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+  },
+  apiKeyInput: {
+    width: '100%',
+    padding: '8px 40px 8px 12px',
+    fontSize: 14,
+    border: '1px solid #DFE1E6',
+    borderRadius: 4,
+    backgroundColor: '#FAFBFC',
+    color: '#172B4D',
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  showHideButton: {
+    position: 'absolute',
+    right: 8,
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: 12,
+    color: '#6B778C',
+    padding: '4px',
+  },
 };
 
 function Toggle({ checked, onChange, projectName }) {
@@ -163,6 +249,20 @@ function Toggle({ checked, onChange, projectName }) {
   );
 }
 
+const MODEL_OPTIONS = {
+  openai: [
+    { value: 'gpt-4o', label: 'GPT-4o' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+    { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
+  ],
+  claude: [
+    { value: 'claude-sonnet-4-5-20250929', label: 'Claude Sonnet 4.5' },
+    { value: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  ],
+};
+
 function App() {
   const [projects, setProjects] = useState([]);
   const [projectSettings, setProjectSettings] = useState({});
@@ -172,6 +272,13 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [hoveredRow, setHoveredRow] = useState(null);
 
+  // LLM settings state
+  const [llmProvider, setLlmProvider] = useState('openai');
+  const [llmModel, setLlmModel] = useState('');
+  const [llmApiKey, setLlmApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [savingLLM, setSavingLLM] = useState(false);
+
   const showNotification = useCallback((message, type = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
@@ -180,9 +287,10 @@ function App() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [projectsResult, settingsResult] = await Promise.all([
+        const [projectsResult, settingsResult, llmResult] = await Promise.all([
           invoke('getProjects'),
           invoke('getProjectChatSettings'),
+          invoke('getLLMSettings'),
         ]);
 
         if (projectsResult.error) {
@@ -192,6 +300,12 @@ function App() {
 
         setProjects(projectsResult.projects || []);
         setProjectSettings(settingsResult || {});
+
+        if (llmResult) {
+          setLlmProvider(llmResult.provider || 'openai');
+          setLlmModel(llmResult.model || '');
+          setLlmApiKey(llmResult.apiKey || '');
+        }
       } catch (err) {
         setError(`Failed to load project data: ${err.message || 'Unknown error'}. Please try again.`);
       } finally {
@@ -229,6 +343,43 @@ function App() {
       showNotification('Failed to save setting. Please try again.', 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleProviderChange = (e) => {
+    const newProvider = e.target.value;
+    setLlmProvider(newProvider);
+    // Reset model when switching providers
+    setLlmModel('');
+  };
+
+  const handleSaveLLM = async () => {
+    if (!llmModel) {
+      showNotification('Please select a model.', 'error');
+      return;
+    }
+    if (!llmApiKey.trim()) {
+      showNotification('Please enter an API key.', 'error');
+      return;
+    }
+
+    setSavingLLM(true);
+    try {
+      const result = await invoke('saveLLMSettings', {
+        provider: llmProvider,
+        model: llmModel,
+        apiKey: llmApiKey.trim(),
+      });
+
+      if (result.error) {
+        showNotification(result.error, 'error');
+      } else {
+        showNotification(`AI model settings saved — using ${llmProvider === 'openai' ? 'OpenAI' : 'Claude'}`);
+      }
+    } catch (err) {
+      showNotification('Failed to save AI model settings. Please try again.', 'error');
+    } finally {
+      setSavingLLM(false);
     }
   };
 
@@ -313,6 +464,83 @@ function App() {
           )}
         </div>
       )}
+
+      {/* ─── AI Model Configuration ──────────────────────────────── */}
+      <div style={styles.sectionSpacing}>
+        <h2 style={{ ...styles.heading, fontSize: 20 }}>AI Model Configuration</h2>
+        <p style={styles.subtitle}>
+          Choose which AI provider and model the Chat Agent uses to respond to customers.
+        </p>
+
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <span style={styles.cardHeaderTitle}>Provider & Model</span>
+            <span style={{ fontSize: 12, color: '#6B778C' }}>
+              {llmProvider === 'openai' ? 'OpenAI' : 'Anthropic Claude'}
+              {llmModel ? ` — ${llmModel}` : ''}
+            </span>
+          </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.label}>AI Provider</label>
+            <select
+              style={styles.select}
+              value={llmProvider}
+              onChange={handleProviderChange}
+            >
+              <option value="openai">OpenAI</option>
+              <option value="claude">Anthropic Claude</option>
+            </select>
+          </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Model</label>
+            <select
+              style={styles.select}
+              value={llmModel}
+              onChange={(e) => setLlmModel(e.target.value)}
+            >
+              <option value="">Select a model...</option>
+              {MODEL_OPTIONS[llmProvider].map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={styles.formGroupLast}>
+            <label style={styles.label}>API Key</label>
+            <div style={styles.apiKeyWrapper}>
+              <input
+                style={styles.apiKeyInput}
+                type={showApiKey ? 'text' : 'password'}
+                value={llmApiKey}
+                onChange={(e) => setLlmApiKey(e.target.value)}
+                placeholder={llmProvider === 'openai' ? 'sk-...' : 'sk-ant-...'}
+              />
+              <button
+                type="button"
+                style={styles.showHideButton}
+                onClick={() => setShowApiKey(!showApiKey)}
+              >
+                {showApiKey ? 'Hide' : 'Show'}
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.buttonRow}>
+            <button
+              type="button"
+              style={styles.saveButton(savingLLM || !llmModel || !llmApiKey.trim())}
+              disabled={savingLLM || !llmModel || !llmApiKey.trim()}
+              onClick={handleSaveLLM}
+            >
+              {savingLLM ? 'Saving...' : 'Save AI Settings'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

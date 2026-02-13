@@ -55,6 +55,30 @@ resolver.define("saveProjectChatSettings", async ({ payload }) => {
   return { success: true };
 });
 
+// ─── LLM / AI Model Settings ────────────────────────────────────────
+
+resolver.define("getLLMSettings", async () => {
+  const settings = await storage.get("llmSettings");
+  return settings || { provider: "openai", model: "", apiKey: "" };
+});
+
+resolver.define("saveLLMSettings", async ({ payload }) => {
+  const { provider, model, apiKey } = payload;
+
+  if (!provider || !["openai", "claude"].includes(provider)) {
+    return { error: "Invalid provider. Must be 'openai' or 'claude'." };
+  }
+  if (!model) {
+    return { error: "Model is required." };
+  }
+  if (!apiKey) {
+    return { error: "API key is required." };
+  }
+
+  await storage.set("llmSettings", { provider, model, apiKey });
+  return { success: true };
+});
+
 // ─── Chat ────────────────────────────────────────────────────────────
 
 resolver.define("chat", async ({ payload }) => {
@@ -76,10 +100,19 @@ resolver.define("chat", async ({ payload }) => {
     }
   }
 
+  // Retrieve LLM settings and include them in the backend request
+  const llmSettings = await storage.get("llmSettings");
+  const chatPayload = {
+    ...payload,
+    llm: llmSettings
+      ? { provider: llmSettings.provider, model: llmSettings.model, apiKey: llmSettings.apiKey }
+      : undefined,
+  };
+
   const response = await fetch(`${settings.fastApiUrl}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(chatPayload),
   });
 
   const data = await response.json();
