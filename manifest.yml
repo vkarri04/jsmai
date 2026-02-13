@@ -1,0 +1,52 @@
+app:
+  id: ari:cloud:ecosystem::app/667c4ca4-44ff-44a7-b0c0-dd8cbb5ad3f8
+  runtime:
+    name: nodejs20.x
+
+modules:
+  jira:issuePanel:
+    - key: agent-issue-panel
+      resource: main
+      resolver:
+        function: resolver
+      title: Agent
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+
+  jiraServiceManagement:portalRequestViewAction:
+    - key: agent-portal-chat
+      resource: portal
+      resolver:
+        function: resolver
+      title: AI Assistant
+
+  jira:adminPage:
+    - key: agent-admin-page
+      resource: admin
+      resolver:
+        function: resolver
+      title: Agent Settings
+
+  function:
+    - key: resolver
+      handler: index.handler
+
+resources:
+  - key: main
+    path: static/hello-world/build
+
+  - key: portal
+    path: static/portal-ui/build
+
+  - key: admin
+    path: static/admin-ui/build
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - manage:jira-configuration
+    - storage:app
+  external:
+    fetch:
+      backend:
+        - https://your-api-domain.com

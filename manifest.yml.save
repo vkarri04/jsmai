@@ -1,0 +1,50 @@
+
+
+
+
+
+modules:
+  jira:issuePanel:
+    - key: agent-issue-panel
+      resource: main
+      resolver:
+        function: resolver
+      title: Agent
+
+  jiraServiceManagement:portalRequestViewAction:
+    - key: agent-portal-chat
+      resource: portal
+      resolver:
+        function: resolver
+      title: AI Assistant
+
+  jira:adminPage:
+    - key: agent-admin-page
+      resource: admin
+      resolver:
+        function: resolver
+      title: Agent Settings
+
+resources:
+  - key: main
+    path: static/hello-world/build
+
+  - key: portal
+    path: static/portal-ui/build
+
+  - key: admin
+    path: static/admin-ui/build
+
+functions:
+  - key: resolver
+    handler: src/index.handler
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - manage:jira-configuration
+  external:
+    fetch:
+      backend:
+        - https://your-api-domain.com
