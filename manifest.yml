@@ -17,7 +17,7 @@ modules:
       resource: portal
       resolver:
         function: resolver
-      title: AI Assistant
+      title: Jira Assistant
 
   jira:adminPage:
     - key: agent-admin-page
