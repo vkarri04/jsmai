@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { invoke } from '@forge/bridge';
+import { invoke, view } from '@forge/bridge';
 
 /* ── keyframe animations injected once ── */
 const keyframes = `
@@ -48,13 +48,101 @@ const WELCOME_MESSAGE = {
     "Hi! I'm your Jira Assistant. I can help you check the status, assignee, and reporter of any Jira issue.\n\nTry asking me something like:\n\u2022 \"What is the status of TJ-1?\"\n\u2022 \"Who is assigned to PROJ-42?\"\n\u2022 \"Tell me about TJ-5\"",
 };
 
+/**
+ * Portal context shape differs slightly across JSM pages. This helper extracts
+ * whichever project references are present so backend checks stay consistent.
+ */
+function extractPortalProjectContext(context) {
+  const extension = context?.extension || {};
+
+  let portalIdCandidate =
+    extension?.portal?.id ??
+    extension?.portalId ??
+    extension?.request?.portalId ??
+    null;
+
+  const projectIdCandidate =
+    extension?.project?.id ??
+    extension?.portal?.projectId ??
+    extension?.request?.projectId ??
+    null;
+
+  const projectKeyCandidate =
+    extension?.project?.key ??
+    extension?.portal?.projectKey ??
+    extension?.request?.projectKey ??
+    null;
+
+  // Fallback for pages where only parent URL exposes portal id.
+  if (!portalIdCandidate && document.referrer) {
+    try {
+      const parentUrl = new URL(document.referrer);
+      const portalMatch = parentUrl.pathname.match(/\/servicedesk\/customer\/portal\/(\d+)/);
+      if (portalMatch?.[1]) {
+        portalIdCandidate = portalMatch[1];
+      }
+    } catch {
+      // Ignore malformed referrer values.
+    }
+  }
+
+  return {
+    projectId: projectIdCandidate ? String(projectIdCandidate) : null,
+    projectKey: projectKeyCandidate ? String(projectKeyCandidate) : null,
+    portalId: portalIdCandidate ? String(portalIdCandidate) : null,
+  };
+}
+
 function App() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([WELCOME_MESSAGE]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [tooltipVisible, setTooltipVisible] = useState(true);
+  const [portalProject, setPortalProject] = useState({ projectId: null, projectKey: null, portalId: null });
+  const [chatEnabledForProject, setChatEnabledForProject] = useState(false);
+  const [availabilityReason, setAvailabilityReason] = useState(null);
+  const [checkingAvailability, setCheckingAvailability] = useState(true);
   const chatEndRef = useRef(null);
+
+  /* load current portal context and decide if widget should render */
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadPortalAvailability() {
+      try {
+        const context = await view.getContext();
+        const extractedProject = extractPortalProjectContext(context);
+
+        const availability = await invoke('getPortalChatAvailability', extractedProject);
+        const resolvedProjectId = availability?.projectId || extractedProject.projectId || null;
+
+        if (!isCancelled) {
+          setPortalProject({
+            projectId: resolvedProjectId,
+            projectKey: extractedProject.projectKey,
+            portalId: extractedProject.portalId,
+          });
+          setChatEnabledForProject(Boolean(availability?.enabled));
+          setAvailabilityReason(availability?.reason || null);
+        }
+      } catch {
+        if (!isCancelled) {
+          setChatEnabledForProject(false);
+          setAvailabilityReason('availability_check_failed');
+        }
+      } finally {
+        if (!isCancelled) {
+          setCheckingAvailability(false);
+        }
+      }
+    }
+
+    loadPortalAvailability();
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   /* auto-scroll on new messages */
   useEffect(() => {
@@ -88,7 +176,12 @@ function App() {
     setLoading(true);
 
     try {
-      const result = await invoke('portalChat', { message: text });
+      const result = await invoke('portalChat', {
+        message: text,
+        projectId: portalProject.projectId,
+        projectKey: portalProject.projectKey,
+        portalId: portalProject.portalId,
+      });
       setMessages((prev) => [
         ...prev,
         {
@@ -112,6 +205,20 @@ function App() {
       handleSend();
     }
   };
+
+  if (checkingAvailability) {
+    return null;
+  }
+
+  // Hide only when explicitly disabled. Keep visible on global portal pages
+  // where a specific project context is not available.
+  const shouldHideWidget =
+    !chatEnabledForProject &&
+    availabilityReason !== 'missing_project_context';
+
+  if (shouldHideWidget) {
+    return null;
+  }
 
   return (
     <div style={s.root}>
@@ -208,13 +315,15 @@ function App() {
 /* ── Styles ── */
 const s = {
   root: {
-    position: 'fixed',
-    bottom: 24,
-    right: 24,
-    zIndex: 2147483647,
+    width: '100%',
+    maxWidth: 520,
+    marginLeft: 'auto',
+    padding: '8px 0',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'flex-end',
+    gap: 12,
+    boxSizing: 'border-box',
     fontFamily:
       "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif",
   },
@@ -273,9 +382,10 @@ const s = {
 
   /* ── Chat window ── */
   chatWindow: {
-    width: 380,
-    height: 520,
-    marginBottom: 12,
+    width: '100%',
+    maxWidth: 480,
+    height: 620,
+    minHeight: 620,
     borderRadius: 16,
     overflow: 'hidden',
     display: 'flex',
@@ -323,6 +433,7 @@ const s = {
     flex: 1,
     overflowY: 'auto',
     padding: 14,
+    minHeight: 380,
     background: '#F4F5F7',
     display: 'flex',
     flexDirection: 'column',

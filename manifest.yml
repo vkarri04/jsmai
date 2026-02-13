@@ -18,6 +18,8 @@ modules:
       resolver:
         function: resolver
       title: Jira Assistant
+      unlicensedAccess:
+        - customer
 
   jira:adminPage:
     - key: agent-admin-page
@@ -45,10 +47,11 @@ permissions:
     - read:jira-work
     - write:jira-work
     - manage:jira-configuration
+    - read:servicedesk-request
     - storage:app
   external:
     fetch:
       backend:
-        - https://your-api-domain.com
-        - https://api.openai.com
-        - https://api.anthropic.com
+        - address: https://your-api-domain.com
+        - address: https://api.openai.com
+        - address: https://api.anthropic.com

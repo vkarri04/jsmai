@@ -2,6 +2,131 @@ import Resolver from "@forge/resolver";
 import api, { storage, route } from "@forge/api";
 
 const resolver = new Resolver();
+const DEFAULT_AGENT_SETTINGS = { enableChatbot: false, fastApiUrl: "" };
+
+// ─── Shared helpers for portal visibility & project resolution ─────────────────
+
+/**
+ * Normalizes project id values to string keys because project settings in
+ * Forge Storage are persisted as object keys (string-indexed).
+ */
+function normalizeProjectId(projectId) {
+  if (projectId === null || projectId === undefined) {
+    return null;
+  }
+  const normalized = String(projectId).trim();
+  return normalized || null;
+}
+
+/**
+ * Resolver invocation context can contain richer portal metadata than frontend
+ * bridge context. Merge this into payload-derived values for reliability.
+ */
+function extractPortalContextFromInvocation(context) {
+  const extension = context?.extension || {};
+  return {
+    projectId:
+      extension?.project?.id ??
+      extension?.portal?.projectId ??
+      extension?.request?.projectId ??
+      null,
+    projectKey:
+      extension?.project?.key ??
+      extension?.portal?.projectKey ??
+      extension?.request?.projectKey ??
+      null,
+    portalId:
+      extension?.portal?.id ??
+      extension?.portalId ??
+      extension?.request?.portalId ??
+      null,
+  };
+}
+
+/**
+ * Portal contexts can provide either project id or project key depending on
+ * the page type. This helper resolves and normalizes to one project id value.
+ */
+async function resolveProjectIdFromContext({ projectId, projectKey, portalId }) {
+  const normalizedProjectId = normalizeProjectId(projectId);
+  if (normalizedProjectId) {
+    return normalizedProjectId;
+  }
+
+  const normalizedPortalId = normalizeProjectId(portalId);
+  if (normalizedPortalId) {
+    try {
+      const portalResponse = await api.asApp().requestJira(
+        route`/rest/servicedeskapi/servicedesk/${normalizedPortalId}`,
+        { headers: { Accept: "application/json" } }
+      );
+
+      if (portalResponse.ok) {
+        const portalData = await portalResponse.json();
+        const portalProjectId = normalizeProjectId(
+          portalData?.projectId || portalData?.project?.id
+        );
+        if (portalProjectId) {
+          return portalProjectId;
+        }
+      }
+    } catch {
+      // Fall through to key-based resolution when servicedesk lookup is unavailable.
+    }
+  }
+
+  if (!projectKey) {
+    return null;
+  }
+
+  try {
+    const response = await api
+      .asApp()
+      .requestJira(route`/rest/api/3/project/${projectKey}?expand=none`, {
+        headers: { Accept: "application/json" },
+      });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const project = await response.json();
+    return normalizeProjectId(project?.id);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Centralized policy used by both frontend visibility checks and chat calls.
+ * A project must be explicitly enabled in Agent Settings to use portal chat.
+ */
+async function getPortalChatAvailability({ projectId, projectKey, portalId }) {
+  const agentSettings = (await storage.get("agentSettings")) || {};
+  const hasExplicitGlobalFlag = Object.prototype.hasOwnProperty.call(agentSettings, "enableChatbot");
+  if (hasExplicitGlobalFlag && !agentSettings.enableChatbot) {
+    return { enabled: false, reason: "disabled_by_admin" };
+  }
+
+  const resolvedProjectId = await resolveProjectIdFromContext({
+    projectId,
+    projectKey,
+    portalId,
+  });
+  if (!resolvedProjectId) {
+    // On some portal pages (for example the portal list), there is no single
+    // project in context. Keep the assistant visible and enforce user access
+    // with asUser() checks when specific issue lookups are requested.
+    return { enabled: true, reason: "missing_project_context", projectId: null };
+  }
+
+  const projectSettings = (await storage.get("projectChatSettings")) || {};
+  if (!projectSettings[resolvedProjectId]) {
+    return { enabled: false, reason: "disabled_for_project", projectId: resolvedProjectId };
+  }
+
+  return { enabled: true, projectId: resolvedProjectId };
+}
 
 // ─── General Settings ────────────────────────────────────────────────
 
@@ -12,21 +137,51 @@ resolver.define("saveSettings", async ({ payload }) => {
 
 resolver.define("getSettings", async () => {
   const settings = await storage.get("agentSettings");
-  return settings || { enableChatbot: false, fastApiUrl: "" };
+  return settings || DEFAULT_AGENT_SETTINGS;
 });
 
 // ─── Project-level Chat Settings ─────────────────────────────────────
 
 resolver.define("getProjects", async () => {
   try {
-    const response = await api.asApp().requestJira(
-      route`/rest/api/3/project/search?typeKey=service_desk&maxResults=100`,
-      { headers: { Accept: "application/json" } }
-    );
+    const projectSearchPath = route`/rest/api/3/project/search?typeKey=service_desk&maxResults=100`;
+    const requestOptions = { headers: { Accept: "application/json" } };
+
+    // Prefer user-context auth for admin UX; if unavailable, fall back to app-context.
+    const requestProjects = async (mode) => {
+      const client = mode === "asUser" ? api.asUser() : api.asApp();
+      try {
+        const response = await client.requestJira(projectSearchPath, requestOptions);
+        return { mode, response };
+      } catch (error) {
+        return { mode, error };
+      }
+    };
+
+    const asUserAttempt = await requestProjects("asUser");
+    let activeAttempt = asUserAttempt;
+
+    const shouldFallbackToApp =
+      Boolean(asUserAttempt.error) ||
+      asUserAttempt.response?.status === 401 ||
+      asUserAttempt.response?.status === 403;
+
+    if (shouldFallbackToApp) {
+      const asAppAttempt = await requestProjects("asApp");
+      activeAttempt = asAppAttempt.error ? asUserAttempt : asAppAttempt;
+    }
+
+    if (activeAttempt.error) {
+      return {
+        error: `Failed to fetch projects (${activeAttempt.mode}): ${activeAttempt.error.message || String(activeAttempt.error)}`,
+      };
+    }
+
+    const { mode, response } = activeAttempt;
 
     if (!response.ok) {
       const text = await response.text();
-      return { error: `Failed to fetch projects: ${response.status} — ${text}` };
+      return { error: `Failed to fetch projects (${mode}): ${response.status} — ${text}` };
     }
 
     const data = await response.json();
@@ -53,6 +208,14 @@ resolver.define("getProjectChatSettings", async () => {
 resolver.define("saveProjectChatSettings", async ({ payload }) => {
   await storage.set("projectChatSettings", payload);
   return { success: true };
+});
+
+resolver.define("getPortalChatAvailability", async ({ payload, context }) => {
+  const invocationContext = extractPortalContextFromInvocation(context);
+  const projectId = payload?.projectId ?? invocationContext.projectId;
+  const projectKey = payload?.projectKey ?? invocationContext.projectKey;
+  const portalId = payload?.portalId ?? invocationContext.portalId;
+  return getPortalChatAvailability({ projectId, projectKey, portalId });
 });
 
 // ─── LLM / AI Model Settings ────────────────────────────────────────
@@ -164,12 +327,24 @@ resolver.define("getIssueDetails", async ({ payload }) => {
 
 // ─── Portal Chat (Jira Assistant) ───────────────────────────────────
 
-resolver.define("portalChat", async ({ payload }) => {
-  const { message } = payload;
+resolver.define("portalChat", async ({ payload, context }) => {
+  const invocationContext = extractPortalContextFromInvocation(context);
+  const { message } = payload || {};
 
   if (!message || !message.trim()) {
     return { reply: "Please enter a message." };
   }
+
+  const availability = await getPortalChatAvailability({
+    projectId: payload?.projectId ?? invocationContext.projectId,
+    projectKey: payload?.projectKey ?? invocationContext.projectKey,
+    portalId: payload?.portalId ?? invocationContext.portalId,
+  });
+  if (!availability.enabled) {
+    return { reply: "Jira Assistant is disabled for this portal project. Please contact your administrator." };
+  }
+
+  const resolvedProjectId = availability.projectId;
 
   // Get LLM settings
   const llmSettings = await storage.get("llmSettings");
@@ -260,18 +435,38 @@ If no issue key is found, respond with:
     // Step 2: Fetch issue details for each issue key
     const issueResults = [];
     for (const key of issueKeys) {
-      const response = await api.asApp().requestJira(
-        route`/rest/api/3/issue/${key}?fields=status,assignee,reporter,summary`,
-        { headers: { Accept: "application/json" } }
-      );
+      let response;
+      try {
+        // Use user-scoped Jira calls so portal customers only get issues they
+        // are actually allowed to read in Jira Service Management.
+        response = await api.asUser().requestJira(
+          route`/rest/api/3/issue/${key}?fields=project,status,assignee,reporter,summary`,
+          { headers: { Accept: "application/json" } }
+        );
+      } catch {
+        issueResults.push({ issueKey: key, error: "not accessible" });
+        continue;
+      }
 
       if (!response.ok) {
-        issueResults.push({ issueKey: key, error: response.status === 404 ? "not found" : "fetch error" });
+        issueResults.push({
+          issueKey: key,
+          error: response.status === 404 ? "not found" : response.status === 403 ? "not accessible" : "fetch error",
+        });
         continue;
       }
 
       const data = await response.json();
       const fields = data.fields || {};
+
+      // Extra safety guard: even if a key is valid, only answer for the same
+      // portal project that the customer is currently browsing.
+      const issueProjectId = normalizeProjectId(fields.project?.id);
+      if (resolvedProjectId && (!issueProjectId || issueProjectId !== resolvedProjectId)) {
+        issueResults.push({ issueKey: key, error: "not in this portal project" });
+        continue;
+      }
+
       issueResults.push({
         issueKey: data.key,
         summary: fields.summary || "",
