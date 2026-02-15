@@ -276,6 +276,7 @@ function App() {
   const [llmProvider, setLlmProvider] = useState('openai');
   const [llmModel, setLlmModel] = useState('');
   const [llmApiKey, setLlmApiKey] = useState('');
+  const [hasStoredApiKey, setHasStoredApiKey] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [savingLLM, setSavingLLM] = useState(false);
 
@@ -304,7 +305,8 @@ function App() {
         if (llmResult) {
           setLlmProvider(llmResult.provider || 'openai');
           setLlmModel(llmResult.model || '');
-          setLlmApiKey(llmResult.apiKey || '');
+          setLlmApiKey(llmResult.apiKeyMasked || llmResult.apiKey || '');
+          setHasStoredApiKey(Boolean(llmResult.hasApiKey));
         }
       } catch (err) {
         setError(`Failed to load project data: ${err.message || 'Unknown error'}. Please try again.`);
@@ -358,7 +360,7 @@ function App() {
       showNotification('Please select a model.', 'error');
       return;
     }
-    if (!llmApiKey.trim()) {
+    if (!llmApiKey.trim() && !hasStoredApiKey) {
       showNotification('Please enter an API key.', 'error');
       return;
     }
@@ -374,6 +376,11 @@ function App() {
       if (result.error) {
         showNotification(result.error, 'error');
       } else {
+        const refreshedSettings = await invoke('getLLMSettings');
+        setLlmProvider(refreshedSettings?.provider || llmProvider);
+        setLlmModel(refreshedSettings?.model || llmModel);
+        setLlmApiKey(refreshedSettings?.apiKeyMasked || refreshedSettings?.apiKey || '');
+        setHasStoredApiKey(Boolean(refreshedSettings?.hasApiKey));
         showNotification(`AI model settings saved — using ${llmProvider === 'openai' ? 'OpenAI' : 'Claude'}`);
       }
     } catch (err) {
@@ -428,13 +435,13 @@ function App() {
               No service management projects found.
             </div>
           ) : (
-            projects.map((project) => (
+            projects.map((project, index) => (
               <div
                 key={project.id}
                 style={{
                   ...styles.projectRow,
                   ...(hoveredRow === project.id ? styles.projectRowHover : {}),
-                  ...(projects.indexOf(project) === projects.length - 1
+                  ...(index === projects.length - 1
                     ? { borderBottom: 'none' }
                     : {}),
                 }}
@@ -532,8 +539,8 @@ function App() {
           <div style={styles.buttonRow}>
             <button
               type="button"
-              style={styles.saveButton(savingLLM || !llmModel || !llmApiKey.trim())}
-              disabled={savingLLM || !llmModel || !llmApiKey.trim()}
+              style={styles.saveButton(savingLLM || !llmModel || (!hasStoredApiKey && !llmApiKey.trim()))}
+              disabled={savingLLM || !llmModel || (!hasStoredApiKey && !llmApiKey.trim())}
               onClick={handleSaveLLM}
             >
               {savingLLM ? 'Saving...' : 'Save AI Settings'}

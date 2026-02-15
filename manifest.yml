@@ -48,6 +48,7 @@ permissions:
     - write:jira-work
     - manage:jira-configuration
     - read:servicedesk-request
+    - write:servicedesk-request
     - storage:app
   external:
     fetch:
